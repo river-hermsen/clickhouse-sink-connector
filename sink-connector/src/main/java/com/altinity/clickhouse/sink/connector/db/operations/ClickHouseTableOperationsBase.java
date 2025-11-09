@@ -5,6 +5,7 @@ import com.altinity.clickhouse.sink.connector.converters.ClickHouseDataTypeMappe
 import com.clickhouse.data.ClickHouseDataType;
 import io.debezium.data.VariableScaleDecimal;
 import io.debezium.time.MicroTimestamp;
+import io.debezium.time.NanoTimestamp;
 import io.debezium.time.Timestamp;
 import io.debezium.time.ZonedTimestamp;
 import org.apache.kafka.connect.data.Field;
@@ -64,6 +65,11 @@ public class ClickHouseTableOperationsBase {
      * String constant for DateTime64(6) type (microsecond precision).
      */
     private static final String DATETIME64_6 = "DateTime64(6)";
+
+    /**
+     * String constant for DateTime64(9) type (nanosecond precision).
+     */
+    private static final String DATETIME64_9 = "DateTime64(9)";
 
     /**
      * Logger for this class.
@@ -159,6 +165,12 @@ public class ClickHouseTableOperationsBase {
                         // TIMESTAMP(1..6) -> ZONEDTIMESTAMP(Debezium)
                         // -> DateTime64(6)
                         columnToDataTypesMap.put(colName, DATETIME64_6);
+                    } else if (f.schema().type() == Schema.INT64_SCHEMA.type()
+                            && f.schema().name().equalsIgnoreCase(
+                            NanoTimestamp.SCHEMA_NAME)) {
+                        // NanoTimestamp (with nanoseconds precision),
+                        // SQL Server DATETIME2(7) -> DateTime64(9)
+                        columnToDataTypesMap.put(colName, DATETIME64_9);
                     } else {
                         columnToDataTypesMap.put(colName, dataType.name());
                     }

@@ -83,6 +83,77 @@ public class DebeziumConverter {
             return modifiedDT.atZone(serverTimezone).format(destFormatter).toString();
         }
     }
+    
+    public static class NanoTimeConverter {
+        /**
+         * Function to convert Long(nanoseconds since midnight)
+         * to Formatted String(Time) for SQL Server TIME(7)
+         * @param value nanoseconds since midnight
+         * @return formatted time string
+         */
+        public static String convert(Object value) {
+            Long nanosSinceMidnight = (Long) value;
+            
+            Instant i = Instant.EPOCH.plusNanos(nanosSinceMidnight);
+            LocalTime time = i.atZone(ZoneOffset.UTC).toLocalTime();
+            
+            // Format with nanosecond precision
+            String formattedTime = time.format(DateTimeFormatter.ofPattern("HH:mm:ss.SSSSSSSSS"));
+            
+            return formattedTime;
+        }
+    }
+
+    public static class NanoTimestampConverter {
+        /**
+         * Function to convert Long(nanoseconds past epoch)
+         * to Formatted String(DateTime) for SQL Server DATETIME2(7)
+         * Represents the number of nanoseconds past the epoch and does not include time zone information.
+         * @param value nanoseconds past epoch
+         * @param sourceTimezone source database timezone
+         * @param serverTimezone ClickHouse server timezone
+         * @param clickHouseDataType target ClickHouse data type
+         * @return formatted datetime string
+         */
+        public static String convert(Object value, ZoneId sourceTimezone,
+                                     ZoneId serverTimezone, ClickHouseDataType clickHouseDataType) {
+            Long epochNanoSeconds = (Long) value;
+
+            // DateTime64(9) supports nanosecond precision
+            DateTimeFormatter destFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
+            if(clickHouseDataType == ClickHouseDataType.DateTime || clickHouseDataType == ClickHouseDataType.DateTime32) {
+                destFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            }
+
+            // Convert nanoseconds to seconds and remaining nanos
+            long epochSeconds = epochNanoSeconds / 1_000_000_000L;
+            long nanos = epochNanoSeconds % 1_000_000_000L;
+
+            TimeZone sourceTZ = TimeZone.getTimeZone(sourceTimezone);
+            int sourceOffset = sourceTZ.getRawOffset();
+
+            if(sourceTZ.inDaylightTime(Date.from(Instant.ofEpochSecond(epochSeconds, nanos)))) {
+                sourceOffset = sourceTZ.getRawOffset() + sourceTZ.getDSTSavings();
+            }
+
+            long sourceOffsetNanos = sourceOffset * 1_000_000L;
+
+            // Adjust for source timezone offset
+            Long epochNanosWithOffset = epochNanoSeconds - sourceOffsetNanos;
+            long seconds = epochNanosWithOffset / 1_000_000_000L;
+            long nanosAdjusted = epochNanosWithOffset % 1_000_000_000L;
+
+            Instant i = Instant.ofEpochSecond(seconds, nanosAdjusted);
+
+            boolean[] rangeExceeded = new boolean[1];
+            Instant modifiedDT = checkIfDateTimeExceedsSupportedRange(i, clickHouseDataType, rangeExceeded);
+            if(rangeExceeded[0]) {
+                // return the modifiedDT as a string without timezone conversion
+                return modifiedDT.atZone(ZoneOffset.UTC).format(destFormatter).toString();
+            }
+            return modifiedDT.atZone(serverTimezone).format(destFormatter).toString();
+        }
+    }
 
     public static class TimestampConverter {
 

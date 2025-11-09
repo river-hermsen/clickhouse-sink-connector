@@ -116,6 +116,24 @@ public class ClickHouseDataTypeMapper {
                         MicroTimestamp.SCHEMA_NAME),
                 ClickHouseDataType.DateTime64);
 
+        // Datetime with nanoseconds precision (SQL Server DATETIME2(7))
+        dataTypesMap.put(
+                new MutablePair<>(Schema.INT64_SCHEMA.type(),
+                        NanoTimestamp.SCHEMA_NAME),
+                ClickHouseDataType.DateTime64);
+
+        // Time with microseconds precision (SQL Server TIME(4-6))
+        dataTypesMap.put(
+                new MutablePair<>(Schema.INT64_SCHEMA.type(),
+                        MicroTime.SCHEMA_NAME),
+                ClickHouseDataType.String);
+
+        // Time with nanoseconds precision (SQL Server TIME(7))
+        dataTypesMap.put(
+                new MutablePair<>(Schema.INT64_SCHEMA.type(),
+                        NanoTime.SCHEMA_NAME),
+                ClickHouseDataType.String);
+
         // BLOB -> String
         dataTypesMap.put(
                 new MutablePair<>(Schema.Type.BYTES, null),
@@ -237,16 +255,20 @@ public class ClickHouseDataTypeMapper {
         }
 
         if (type == Schema.INT64_SCHEMA.type()) {
-            // Time -> INT64 + io.debezium.time.MicroTime
+            // Time -> INT64 + io.debezium.time.MicroTime or NanoTime
             if (schemaName != null
-                    && schemaName.equalsIgnoreCase(MicroTime.SCHEMA_NAME)) {
+                    && (schemaName.equalsIgnoreCase(MicroTime.SCHEMA_NAME)
+                    || schemaName.equalsIgnoreCase(NanoTime.SCHEMA_NAME))) {
                 isFieldTime = true;
             } else if ((schemaName != null
                     && schemaName.equalsIgnoreCase(Timestamp.SCHEMA_NAME))
                     || (schemaName != null
-                    && schemaName.equalsIgnoreCase(MicroTimestamp.SCHEMA_NAME))) {
+                    && schemaName.equalsIgnoreCase(MicroTimestamp.SCHEMA_NAME))
+                    || (schemaName != null
+                    && schemaName.equalsIgnoreCase(NanoTimestamp.SCHEMA_NAME))) {
                 // DateTime -> INT64 + Timestamp (Debezium)
                 // MicroTimestamp ("yyyy-MM-dd HH:mm:ss")
+                // NanoTimestamp (nanoseconds precision)
                 isFieldDateTime = true;
             } else {
                 isFieldTypeBigInt = true;
@@ -313,6 +335,11 @@ public class ClickHouseDataTypeMapper {
                     ps.setString(index, DebeziumConverter.MicroTimestampConverter.convert(value, ZoneId.of(sourceTimeZone),
                             serverTimeZone, clickHouseDataType));
                 }
+                else if (schemaName != null && schemaName.equalsIgnoreCase(NanoTimestamp.SCHEMA_NAME)) {
+                    // SQL Server DATETIME2(7) - nanoseconds precision
+                    ps.setString(index, DebeziumConverter.NanoTimestampConverter.convert(value, ZoneId.of(sourceTimeZone),
+                            serverTimeZone, clickHouseDataType));
+                }
                 else if (value instanceof Long) {
                     // DATETIME(0), DATETIME(1), DATETIME(2), DATETIME(3)
                     boolean isColumnDateTime64 = false;
@@ -323,7 +350,13 @@ public class ClickHouseDataTypeMapper {
                         ZoneId.of(sourceTimeZone), serverTimeZone));
                 }
             } else if (isFieldTime) {
-                ps.setString(index, DebeziumConverter.MicroTimeConverter.convert(value));
+                if (schemaName != null && schemaName.equalsIgnoreCase(NanoTime.SCHEMA_NAME)) {
+                    // SQL Server TIME(7) - nanoseconds precision
+                    ps.setString(index, DebeziumConverter.NanoTimeConverter.convert(value));
+                } else {
+                    // MicroTime or other time types
+                    ps.setString(index, DebeziumConverter.MicroTimeConverter.convert(value));
+                }
             }
             // Convert this to string.
             // ps.setString(index, String.valueOf(value));
