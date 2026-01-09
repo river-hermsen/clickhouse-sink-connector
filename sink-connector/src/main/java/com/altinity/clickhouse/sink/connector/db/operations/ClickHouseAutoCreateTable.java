@@ -324,7 +324,7 @@ public class ClickHouseAutoCreateTable
     }
 
     public void createHistoryDatabase(String databaseName, Connection connection, ClickHouseSinkConnectorConfig config) throws SQLException {
-        String sql = "CREATE DATABASE IF NOT EXISTS " + databaseName;
+        String sql = "CREATE DATABASE IF NOT EXISTS `" + databaseName + "`";
         log.info(String.format(
                 "**** AUTO CREATE HISTORY DATABASE for database(%s), Query :%s)",
                 databaseName, sql));
