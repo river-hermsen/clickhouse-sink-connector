@@ -206,7 +206,7 @@ public class DBMetadata {
 
         while (retryCount < MAX_RETRIES) {
             try (Statement stmt = conn.createStatement()) {
-                String showSchemaQuery = String.format("show create table %s.`%s`", databaseName, tableName);
+                String showSchemaQuery = String.format("show create table `%s`.`%s`", databaseName, tableName);
                 ResultSet rs = stmt.executeQuery(showSchemaQuery);
                 if (rs != null && rs.next()) {
                     String response = rs.getString(1);
@@ -720,7 +720,7 @@ public class DBMetadata {
         PreparedStatement ps = null;
         while(retryCount < MAX_RETRIES) {
             try {
-                ps = conn.prepareStatement("TRUNCATE TABLE " + databaseName + "." + tableName);
+                ps = conn.prepareStatement("TRUNCATE TABLE `" + databaseName + "`.`" + tableName + "`");
                 ps.execute();
                 break;
             } catch (SQLException e) {
