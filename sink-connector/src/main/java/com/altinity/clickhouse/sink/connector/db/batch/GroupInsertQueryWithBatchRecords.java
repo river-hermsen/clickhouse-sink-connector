@@ -80,9 +80,6 @@ public class GroupInsertQueryWithBatchRecords {
                     ClickHouseSinkConnectorConfigVariables.ENABLE_SCHEMA_EVOLUTION
                             .toString());
 
-            log.debug("Processing record for table: {}, CDC operation: {}, Schema evolution enabled: {}",
-                    tableName, record.getCdcOperation(), enableSchemaEvolution);
-
             if (CdcRecordState.CDC_RECORD_STATE_BEFORE ==
                     getCdcSectionBasedOnOperation(record.getCdcOperation())) {
                 result = updateQueryToRecordsMap(record,
@@ -92,8 +89,6 @@ public class GroupInsertQueryWithBatchRecords {
                     getCdcSectionBasedOnOperation(record.getCdcOperation())) {
                 if (enableSchemaEvolution) {
                     try {
-                        log.info("***** SCHEMA EVOLUTION TRIGGERED for table: {} *****", tableName);
-                        log.debug("After struct field count: {}", record.getAfterStruct().schema().fields().size());
                         new ClickHouseAlterTable().alterTable(
                                 record.getAfterStruct().schema().fields(),
                                 tableName, connection, columnNameToDataTypeMap, config);

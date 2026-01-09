@@ -114,26 +114,13 @@ public class ClickHouseAlterTable
                            Map<String, String> columnNameToDataTypeMap,
                            ClickHouseSinkConnectorConfig config) throws SQLException {
 
-        log.info("***** SCHEMA EVOLUTION CHECK for table: {} *****", tableName);
-        log.info("Incoming schema fields count: {}", modifiedFields.size());
-        log.info("Incoming schema fields: {}", modifiedFields.stream()
-                .map(Field::name)
-                .collect(java.util.stream.Collectors.toList()));
-        log.info("Existing ClickHouse columns count: {}", columnNameToDataTypeMap.size());
-        log.info("Existing ClickHouse columns: {}", columnNameToDataTypeMap.keySet());
-
         List<Field> missingFieldsInCH = new ArrayList<>();
         // Identify columns that are missing in ClickHouse.
         for (Field f : modifiedFields) {
             String colName = f.name();
             if (!columnNameToDataTypeMap.containsKey(colName)) {
-                log.info("Found missing column in ClickHouse: {} (type: {})", colName, f.schema().type());
                 missingFieldsInCH.add(f);
             }
-        }
-
-        if (missingFieldsInCH.isEmpty()) {
-            log.info("***** NO MISSING COLUMNS - Schema evolution not needed for table: {} *****", tableName);
         }
 
         if (!missingFieldsInCH.isEmpty()) {
