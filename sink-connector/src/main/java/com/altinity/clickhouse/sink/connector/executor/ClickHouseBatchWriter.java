@@ -411,14 +411,17 @@ public class ClickHouseBatchWriter {
                 ClickHouseSinkConnectorConfigVariables.
                         ENABLE_KAFKA_OFFSET.toString())) {
             log.info("***** KAFKA OFFSET MANAGEMENT ENABLED *****");
+            String offsetTableName = this.config.getString(
+                    ClickHouseSinkConnectorConfigVariables.KAFKA_OFFSET_METADATA_TABLE.toString());
             DbKafkaOffsetWriter dbKafkaOffsetWriter = new DbKafkaOffsetWriter(
                     dbCredentials.getHostName(), dbCredentials.getPort(),
-                    dbCredentials.getDatabase(), "topic_offset_metadata",
+                    databaseName, offsetTableName,
                     dbCredentials.getUserName(), dbCredentials.getPassword(),
                     this.config, databaseConn);
             try {
                 dbKafkaOffsetWriter.insertTopicOffsetMetadata(
                         partitionToOffsetMap);
+                log.info("Persisted offsets to ClickHouse: {}", partitionToOffsetMap);
             } catch (SQLException e) {
                 log.error("Error persisting offsets to CH", e);
             }
