@@ -149,7 +149,8 @@ public class DbKafkaOffsetWriter extends BaseDbWriter {
         Map<TopicPartition, Long> result = new HashMap<>();
 
         Statement stmt = this.getConnection().createStatement();
-        ResultSet rs = stmt.executeQuery("select * from topic_offset_metadata");
+        // Use FINAL to get properly merged/aggregated results from AggregatingMergeTree
+        ResultSet rs = stmt.executeQuery("select * from topic_offset_metadata FINAL");
 
         while (rs.next()) {
             String topicName = rs.getString(

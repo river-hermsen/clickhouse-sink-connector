@@ -359,6 +359,16 @@ public class ClickHouseSinkTask extends SinkTask {
 
         log.info("preCommit({}) {}", this.id, currentOffsets.size());
 
+        // When enable.kafka.offset is true, return offsets from ClickHouse
+        // This ensures Kafka only commits offsets for records that have been
+        // successfully persisted to ClickHouse, achieving exactly-once semantics
+        if (this.config.getBoolean(
+                ClickHouseSinkConnectorConfigVariables.ENABLE_KAFKA_OFFSET.toString())) {
+            log.info("preCommit({}) using ClickHouse offsets", this.id);
+            return getClickHouseOffsets(currentOffsets);
+        }
+
+        // Default behavior: return Kafka's offsets (at-least-once semantics)
         Map<TopicPartition, OffsetAndMetadata> committedOffsets =
                 new HashMap<>();
 
@@ -373,6 +383,90 @@ public class ClickHouseSinkTask extends SinkTask {
         }
 
         return committedOffsets;
+    }
+
+    /**
+     * Retrieves offsets from ClickHouse for all partitions in currentOffsets.
+     * Returns only offsets that have been successfully written to ClickHouse.
+     *
+     * @param currentOffsets The offsets Kafka wants to commit
+     * @return Offsets from ClickHouse (only for successfully persisted records)
+     */
+    private Map<TopicPartition, OffsetAndMetadata> getClickHouseOffsets(
+            Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
+
+        Map<TopicPartition, OffsetAndMetadata> clickHouseOffsets = new HashMap<>();
+
+        // Group partitions by database
+        Map<String, Set<TopicPartition>> databaseToPartitions = new HashMap<>();
+        for (TopicPartition tp : currentOffsets.keySet()) {
+            String database = getDatabaseFromTopic(tp.topic());
+            if (database != null) {
+                databaseToPartitions.computeIfAbsent(database, k -> new HashSet<>()).add(tp);
+            }
+        }
+
+        String hostName = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_URL.toString());
+        int port = this.config.getInt(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_PORT.toString());
+        String userName = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_USER.toString());
+        String password = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_PASS.toString());
+        String offsetTable = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.KAFKA_OFFSET_METADATA_TABLE.toString());
+
+        for (Map.Entry<String, Set<TopicPartition>> entry : databaseToPartitions.entrySet()) {
+            String database = entry.getKey();
+            Set<TopicPartition> dbPartitions = entry.getValue();
+
+            Connection conn = null;
+            try {
+                String connectionUrl = BaseDbWriter.getConnectionString(hostName, port, database);
+                conn = BaseDbWriter.createConnection(
+                        connectionUrl, "clickhouse-sink-offset-precommit",
+                        userName, password, database, this.config);
+
+                if (conn == null) {
+                    log.warn("preCommit: Could not connect to database {} to read offsets", database);
+                    continue;
+                }
+
+                DbKafkaOffsetWriter offsetReader = new DbKafkaOffsetWriter(
+                        hostName, port, database, offsetTable,
+                        userName, password, this.config, conn);
+
+                Map<TopicPartition, Long> storedOffsets = offsetReader.getStoredOffsets();
+
+                // Only return offsets for partitions that have been written to ClickHouse
+                for (TopicPartition tp : dbPartitions) {
+                    Long storedOffset = storedOffsets.get(tp);
+                    if (storedOffset != null && storedOffset >= 0) {
+                        // Return stored offset + 1 (Kafka commits the NEXT offset to read)
+                        clickHouseOffsets.put(tp, new OffsetAndMetadata(storedOffset + 1));
+                        log.debug("preCommit: {} -> ClickHouse offset {} (committing {})",
+                                tp, storedOffset, storedOffset + 1);
+                    } else {
+                        log.debug("preCommit: {} has no ClickHouse offset yet", tp);
+                    }
+                }
+
+                conn.close();
+            } catch (Exception e) {
+                log.error("preCommit: Error reading offsets from database {}: {}",
+                        database, e.getMessage());
+                if (conn != null) {
+                    try {
+                        conn.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        }
+
+        log.info("preCommit({}) returning {} ClickHouse offsets", this.id, clickHouseOffsets.size());
+        return clickHouseOffsets;
     }
 
     //  @Override
