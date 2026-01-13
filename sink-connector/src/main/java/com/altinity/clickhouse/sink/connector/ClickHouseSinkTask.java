@@ -3,6 +3,8 @@ package com.altinity.clickhouse.sink.connector;
 import com.altinity.clickhouse.sink.connector.common.Utils;
 import com.altinity.clickhouse.sink.connector.common.Version;
 import com.altinity.clickhouse.sink.connector.converters.ClickHouseConverter;
+import com.altinity.clickhouse.sink.connector.db.BaseDbWriter;
+import com.altinity.clickhouse.sink.connector.db.DbKafkaOffsetWriter;
 import com.altinity.clickhouse.sink.connector.deduplicator.DeDuplicator;
 import com.altinity.clickhouse.sink.connector.executor.ClickHouseBatchExecutor;
 import com.altinity.clickhouse.sink.connector.executor.ClickHouseBatchRunnable;
@@ -16,11 +18,14 @@ import org.apache.kafka.connect.sink.SinkTask;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.sql.Connection;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -154,12 +159,111 @@ public class ClickHouseSinkTask extends SinkTask {
      * Called when the task is opened, typically to initialize or resume
      * processing for the given set of partitions.
      *
+     * If Kafka offset management is enabled, this method reads the stored
+     * offsets from ClickHouse and seeks to those positions.
+     *
      * @param partitions The collection of topic partitions that
      *                   will be processed by this task.
      */
     @Override
     public void open(final Collection<TopicPartition> partitions) {
         log.info("open({}):{}", this.id, partitions.size());
+
+        // Check if Kafka offset management is enabled
+        if (!this.config.getBoolean(
+                ClickHouseSinkConnectorConfigVariables.ENABLE_KAFKA_OFFSET.toString())) {
+            log.info("Kafka offset management is disabled, using Kafka offsets");
+            return;
+        }
+
+        log.info("Kafka offset management enabled, reading stored offsets from ClickHouse");
+
+        // Group partitions by database
+        Map<String, Set<TopicPartition>> databaseToPartitions = new HashMap<>();
+        for (TopicPartition tp : partitions) {
+            String database = getDatabaseFromTopic(tp.topic());
+            if (database != null) {
+                databaseToPartitions.computeIfAbsent(database, k -> new HashSet<>()).add(tp);
+            }
+        }
+
+        // For each database, read stored offsets and seek
+        String hostName = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_URL.toString());
+        int port = this.config.getInt(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_PORT.toString());
+        String userName = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_USER.toString());
+        String password = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.CLICKHOUSE_PASS.toString());
+        String offsetTable = this.config.getString(
+                ClickHouseSinkConnectorConfigVariables.KAFKA_OFFSET_METADATA_TABLE.toString());
+
+        for (Map.Entry<String, Set<TopicPartition>> entry : databaseToPartitions.entrySet()) {
+            String database = entry.getKey();
+            Set<TopicPartition> dbPartitions = entry.getValue();
+
+            try {
+                String connectionUrl = BaseDbWriter.getConnectionString(hostName, port, database);
+                Connection conn = BaseDbWriter.createConnection(
+                        connectionUrl, "clickhouse-sink-offset-reader",
+                        userName, password, database, this.config);
+
+                if (conn == null) {
+                    log.warn("Could not connect to database {} to read offsets", database);
+                    continue;
+                }
+
+                DbKafkaOffsetWriter offsetReader = new DbKafkaOffsetWriter(
+                        hostName, port, database, offsetTable,
+                        userName, password, this.config, conn);
+
+                Map<TopicPartition, Long> storedOffsets = offsetReader.getStoredOffsets();
+
+                // Seek to stored offsets for partitions we're assigned
+                for (TopicPartition tp : dbPartitions) {
+                    Long storedOffset = storedOffsets.get(tp);
+                    if (storedOffset != null && storedOffset >= 0) {
+                        // Seek to offset + 1 since stored offset is last processed
+                        long seekOffset = storedOffset + 1;
+                        log.info("Seeking {} to offset {} (stored: {})",
+                                tp, seekOffset, storedOffset);
+                        context.offset(tp, seekOffset);
+                    } else {
+                        log.info("No stored offset found for {}, using Kafka offset", tp);
+                    }
+                }
+
+                conn.close();
+            } catch (Exception e) {
+                log.error("Error reading stored offsets from database {}: {}",
+                        database, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Extracts the database name from a Debezium topic name.
+     * Topic format: server.database.schema.table
+     *
+     * @param topicName The topic name
+     * @return The database name, or null if not found
+     */
+    private String getDatabaseFromTopic(String topicName) {
+        if (topicName == null || topicName.isEmpty()) {
+            return null;
+        }
+
+        String[] parts = topicName.split("\\.");
+        // Debezium SQL Server format: server.database.schema.table
+        if (parts.length >= 4) {
+            return parts[1]; // Database is the second part
+        }
+        // Fallback for 3-part format: server.database.table
+        if (parts.length >= 3) {
+            return parts[1];
+        }
+        return null;
     }
 
     /**
